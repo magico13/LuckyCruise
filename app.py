@@ -18,11 +18,19 @@ import mss
 
 digit_regex = r'\d+'
 
-current_speed_box = (1490, 710, 1525, 730)
-speed_limit_box = (1500, 780, 1525, 805)
+# 1080p
+# current_speed_box = (1490, 710, 1525, 730)
+# speed_limit_box = (1500, 780, 1525, 805)
+
+# 1440p
+current_speed_box = (1985, 945, 2033, 975)
+speed_limit_box = (2000, 1040, 2033, 1075)
 
 key_accel = 'w'
 key_brake = 's'
+key_cruise = 'c'
+key_cruise_up = 'h'
+key_cruise_dwn = 'n'
 
 should_execute = False
 running = True
@@ -31,9 +39,12 @@ current_speed = 0
 speed_limit = 0
 braking = False
 accelerating = False
+current_cruise = 0
+minimum_cruise = 30 # km/h, minimum speed at which cruise can be enabled
+
 
 log_file = open('log.csv', 'w')
-log_file.write('Speed, Limit, Enabled, Accel, Brake\n')
+log_file.write('Speed, Limit, Cruise, Enabled, Accel, Brake\n')
 
 # UI elements
 dirty_ui = False
@@ -44,22 +55,36 @@ window = tk.Tk()
 enabled_lbl = tk.Label(text=f'Enabled: {should_execute}')
 cur_speed_lbl = tk.Label(text=f'Current: {current_speed}')
 speed_limit_lbl = tk.Label(text=f'Limit: {speed_limit}')
+cur_cruise_lbl = tk.Label(text=f'Cruise: {current_cruise}')
 accel_lbl = tk.Label(text=f'Accelerating: {accelerating}')
 braking_lbl = tk.Label(text=f'Braking: {braking}')
 speed_img_lbl = tk.Label()
 limit_img_lbl = tk.Label()
 # /UI elements
 
-def determine_commands(current, limit):
-    accelerate = (current < limit)
-    brake = (current > (limit + 5))
+def determine_commands(current, limit, cruise_active, cruise):
+    accelerate = (current < minimum_cruise)
+    brake = False #(current > (limit + 5))
     # print(f'Accel: {accelerate} Brake: {brake}')
-    return accelerate, brake
+    increase_cruise = cruise_active and cruise < limit
+    decrease_cruise = cruise_active and cruise > limit # if equal, do neither
+    activate_cruise = not cruise_active and current >= minimum_cruise
+    return accelerate, brake, activate_cruise, increase_cruise, decrease_cruise
 
 
-def execute_commands(accel, brake):
+def execute_commands(accel, brake, enCruise, upCruise, dwnCruise):
+    global current_cruise
     if accel: keyboard.press(key_accel)
     if brake: keyboard.press(key_brake)
+    if enCruise: 
+        keyboard.press_and_release(key_cruise)
+        current_cruise = current_speed
+    if upCruise: 
+        keyboard.press_and_release(key_cruise_up)
+        current_cruise += 1
+    if dwnCruise: 
+        keyboard.press_and_release(key_cruise_dwn)
+        current_cruise -= 1
 
     if not accel: keyboard.release(key_accel)
     if not brake: keyboard.release(key_brake)
@@ -84,9 +109,11 @@ def OnKeyboardEvent(event):
         #print('Key:', event.Key)
         global should_execute
         global dirty_ui
+        global current_cruise
         dirty_ui = True
         should_execute = not should_execute
-        execute_commands(False, False)
+        if not should_execute: current_cruise = 0
+        execute_commands(False, False, False, False, False)
 
 # return True to pass the event to other handlers
     return True
@@ -107,6 +134,7 @@ def work_thread():
     global latest_speed_img
     global latest_limit_img
     global dirty_ui
+    global current_cruise
 
     sct = mss.mss()
     while running:
@@ -154,17 +182,21 @@ def work_thread():
         # print(f'current: {current_speed} limit: {speed_limit}')
         was_accel = accelerating
         was_brake = braking
-        (accelerating, braking) = determine_commands(current_speed, speed_limit)
-        if should_execute: execute_commands(accelerating, braking)
+        was_cruise = current_cruise > 0
+        (accelerating, braking, enCruise, upCruise, dwnCruise) = determine_commands(current_speed, speed_limit, was_cruise, current_cruise)
+        if should_execute: 
+            execute_commands(accelerating, braking, enCruise, upCruise, dwnCruise)
         if was_accel != accelerating or was_brake != braking: dirty_ui = True
         if dirty_ui: 
             en = 1 if should_execute else 0
             ac = 1 if accelerating else 0
             br = 1 if braking else 0
-            log_file.write(f'{current_speed}, {speed_limit}, {en}, {ac}, {br}\n') # only need to log any changes
+            log_file.write(f'{current_speed}, {speed_limit}, {current_cruise}, {en}, {ac}, {br}\n') # only need to log any changes
             
         
         # cv2.waitKey(50)
+
+print(pytesseract.get_tesseract_version())
 
 # create a hook manager
 hm = pyWinhook.HookManager()
@@ -180,6 +212,7 @@ thread.start()
 enabled_lbl.pack()
 cur_speed_lbl.pack()
 speed_limit_lbl.pack()
+cur_cruise_lbl.pack()
 accel_lbl.pack()
 braking_lbl.pack()
 speed_img_lbl.pack()
@@ -189,8 +222,6 @@ window.attributes('-topmost', True)
 window.update()
 # window.mainloop()
 
-
-
 try:
     while running:
         # update UI
@@ -198,6 +229,7 @@ try:
             enabled_lbl.configure(text=f'Enabled: {should_execute}')
             cur_speed_lbl.configure(text=f'Current: {current_speed}')
             speed_limit_lbl.configure(text=f'Limit: {speed_limit}')
+            cur_cruise_lbl.configure(text=f'Cruise: {current_cruise}')
             accel_lbl.configure(text=f'Accelerating: {accelerating}')
             braking_lbl.configure(text=f'Braking: {braking}')
 
