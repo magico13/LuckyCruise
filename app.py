@@ -1,14 +1,10 @@
-import os
-
 import numpy as np
 import cv2
-import imutils
-# from PIL import ImageGrab
 from PIL import Image, ImageTk
 import keyboard
 import pytesseract
 import re
-import pythoncom, pyWinhook
+import pyWinhook
 import threading
 from time import sleep
 
@@ -17,6 +13,10 @@ import tkinter as tk
 import mss
 
 digit_regex = r'\d+'
+
+offset = 4 # km/h to go above (or below if negative) the speed limit
+step = 2 # must match the "Cruise control grid step" setting
+
 
 # 1080p
 # current_speed_box = (1490, 710, 1525, 730)
@@ -34,7 +34,6 @@ key_cruise_dwn = 'n'
 
 should_execute = False
 running = True
-
 current_speed = 0
 speed_limit = 0
 braking = False
@@ -66,8 +65,8 @@ def determine_commands(current, limit, cruise_active, cruise):
     accelerate = (current < minimum_cruise)
     brake = False #(current > (limit + 5))
     # print(f'Accel: {accelerate} Brake: {brake}')
-    increase_cruise = cruise_active and cruise < limit
-    decrease_cruise = cruise_active and cruise > limit # if equal, do neither
+    increase_cruise = cruise_active and cruise < (limit + offset)
+    decrease_cruise = cruise_active and (cruise - step) >= (limit + offset)
     activate_cruise = not cruise_active and current >= minimum_cruise
     return accelerate, brake, activate_cruise, increase_cruise, decrease_cruise
 
@@ -81,10 +80,10 @@ def execute_commands(accel, brake, enCruise, upCruise, dwnCruise):
         current_cruise = current_speed
     if upCruise: 
         keyboard.press_and_release(key_cruise_up)
-        current_cruise += 1
+        current_cruise += step
     if dwnCruise: 
         keyboard.press_and_release(key_cruise_dwn)
-        current_cruise -= 1
+        current_cruise -= step
 
     if not accel: keyboard.release(key_accel)
     if not brake: keyboard.release(key_brake)
@@ -256,4 +255,6 @@ except:
 
 #cv2.destroyAllWindows()
 
-#TODO: Put braking on a PID or something because it *way* overshoots. Probably only needs a short tap most of the time
+#TODO: Some sort of filtering to throw out random values that make no sense (91, random drops to single digits)
+# Option for % offset rather than absolute (ie 5% is 4km/h at 80, 2 at 40, etc)
+# UI options to change offset on the fly, other configuration
