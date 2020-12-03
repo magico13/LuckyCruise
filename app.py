@@ -129,91 +129,104 @@ def cv_img_to_tk(src):
     img = Image.fromarray(img)    
     return ImageTk.PhotoImage(img)
 
-def work_thread():
+def extract_current_speed():
+    cur_raw =  sct.grab(current_speed_box)
+    cur_speed_img = np.array(cur_raw)
+    cur_speed_img = cv2.cvtColor(cur_speed_img, cv2.COLOR_RGB2GRAY)
+    cur_speed_img = cv2.threshold(cur_speed_img, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+    
+    # t_grab_speed = perf_counter()-start_timer
+    speed = -1
+    try:
+        current_ocr = pytesseract.image_to_string(cur_speed_img, config='--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789')
+        speed = int(re.match(digit_regex, current_ocr)[0])
+    except:
+        pass
+    return speed, cur_speed_img
+    # t_calc_speed = perf_counter()-start_timer
+
+def extract_current_limit():
+    limit_raw =  sct.grab(speed_limit_box)
+    speed_limit_img = np.array(limit_raw)
+    speed_limit_img = cv2.cvtColor(speed_limit_img, cv2.COLOR_RGB2GRAY)
+    speed_limit_img = cv2.threshold(speed_limit_img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
+
+    latest_limit_img = speed_limit_img
+    # t_grab_limit = perf_counter()-start_timer
+    limit = -1
+    try:
+        limit_ocr = pytesseract.image_to_string(speed_limit_img, config='--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789')
+        
+        limit = int(re.match(digit_regex, limit_ocr)[0])
+        
+    except:
+        pass
+
+    return limit, speed_limit_img
+
+def current_speed_thread():
     global current_speed
-    global speed_limit
-    global braking
-    global accelerating
     global latest_speed_img
+    global dirty_ui
+    while running:
+        prev_speed = current_speed
+        (speed, latest_speed_img)  = extract_current_speed()
+        if speed > 100 or speed < 0: speed = prev_speed # safety
+        current_speed = speed
+        if speed != prev_speed: dirty_ui = True
+
+def speed_limit_thread():
+    global speed_limit
     global latest_limit_img
     global dirty_ui
+    while running:
+        prev_limit = speed_limit
+        (limit, latest_limit_img) = extract_current_limit()
+        if limit > 100 or limit < 1: limit = prev_limit
+        speed_limit = limit
+        if limit != prev_limit: dirty_ui = True
+
+def work_thread():
+    global braking
+    global accelerating
+    global dirty_ui
     global current_cruise
+
+    sleep_time = 1 / 30 # 30 ops per second, ideally
 
     counter = 5
     counter_timer = perf_counter()
     limit_count = 5
-    sct = mss.mss()
+    
     while running:
         start_timer = perf_counter()
         counter += 1
-        # img_orig = cv2.imread('Sample_1.jpg')
-        
-        #cur_raw = ImageGrab.grab(bbox=current_speed_box)
-        cur_raw =  sct.grab(current_speed_box)
-        cur_speed_img = np.array(cur_raw)
-        cur_speed_img = cv2.cvtColor(cur_speed_img, cv2.COLOR_RGB2GRAY)
-        cur_speed_img = cv2.threshold(cur_speed_img, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
-
-        #remove any blobs touching the right edge (part of the km/h text)
-
-
-        latest_speed_img = cur_speed_img
-        t_grab_speed = perf_counter()-start_timer
-        try:
-            current_ocr = pytesseract.image_to_string(cur_speed_img, config='--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789')
-            prev_speed = current_speed
-            current_speed = int(re.match(digit_regex, current_ocr)[0])
-            if current_speed > 100 or current_speed < 0: current_speed = prev_speed # safety
-            # cv2.imshow('current', cur_speed_img)
-            #print(current)
-            if current_speed != prev_speed: dirty_ui = True
-        except:
-            pass
-        t_calc_speed = perf_counter()-start_timer
-        t_grab_limit = t_calc_speed
-        t_calc_limit = t_calc_speed
-
-        if counter >= limit_count: # only check limit infrequently
-            limit_raw =  sct.grab(speed_limit_box)
-            speed_limit_img = np.array(limit_raw)
-            speed_limit_img = cv2.cvtColor(speed_limit_img, cv2.COLOR_RGB2GRAY)
-            speed_limit_img = cv2.threshold(speed_limit_img, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)[1]
-
-            latest_limit_img = speed_limit_img
-            t_grab_limit = perf_counter()-start_timer
-            try:
-                limit_ocr = pytesseract.image_to_string(speed_limit_img, config='--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789')
-                prev_limit = speed_limit
-                speed_limit = int(re.match(digit_regex, limit_ocr)[0])
-                if speed_limit > 100 or speed_limit < 1: speed_limit = prev_limit
-                if speed_limit != prev_limit: dirty_ui = True
-            except:
-                pass
-            t_calc_limit = perf_counter()-start_timer
 
         was_accel = accelerating
         was_brake = braking
         was_cruise = current_cruise > 0
         (accelerating, braking, enCruise, upCruise, dwnCruise) = determine_commands(current_speed, speed_limit, was_cruise, current_cruise)
-        t_determine = perf_counter()-start_timer
+        # t_determine = perf_counter()-start_timer
         if should_execute: 
             execute_commands(accelerating, braking, enCruise, upCruise, dwnCruise)
-        t_execute = perf_counter()-start_timer
+        # t_execute = perf_counter()-start_timer
         if was_accel != accelerating or was_brake != braking: dirty_ui = True
         if dirty_ui:
             en = 1 if should_execute else 0
             ac = 1 if accelerating else 0
             br = 1 if braking else 0
             log_file.write(f'{current_speed}, {speed_limit}, {current_cruise}, {en}, {ac}, {br}\n') # only need to log any changes
-        t_log = perf_counter()-start_timer
+        # t_log = perf_counter()-start_timer
         end_timer = perf_counter()-start_timer
         if counter >= limit_count: # only check limit infrequently
             lps = limit_count / (perf_counter() - counter_timer)
             counter_timer = perf_counter()
-            print(f'LPS: {lps}')
+            # print(f'LPS: {lps}')
             counter = 0
-            print(f'Loop time: {end_timer}\ngs:{t_grab_speed} cs:{t_calc_speed-t_grab_speed} gl:{t_grab_limit-t_calc_speed} cl:{t_calc_limit-t_grab_limit} det:{t_determine-t_calc_limit} ex:{t_execute-t_determine} log:{t_log-t_execute}')
+            #print(f'Loop time: {end_timer}\ngs:{start_timer} cs:{t_calc_speed-start_timer} gl:{t_grab_limit-t_calc_speed} cl:{t_calc_limit-t_grab_limit} det:{t_determine-t_calc_limit} ex:{t_execute-t_determine} log:{t_log-t_execute}')
+            # print(f'Loop time: {end_timer}')
         # cv2.waitKey(50)
+        sleep(sleep_time)
 
 print(pytesseract.get_tesseract_version())
 
@@ -224,9 +237,18 @@ hm.KeyDown = OnKeyboardEvent
 # set the hook
 hm.HookKeyboard()
 
+sct = mss.mss()
+
 #create a thread to process images/send commands
-thread = threading.Thread(target=work_thread)
-thread.start()
+t_speed = threading.Thread(target=current_speed_thread)
+t_speed.start()
+
+t_limit = threading.Thread(target=speed_limit_thread)
+t_limit.start()
+
+t_worker = threading.Thread(target=work_thread)
+t_worker.start()
+
 
 enabled_lbl.pack()
 cur_speed_lbl.pack()
