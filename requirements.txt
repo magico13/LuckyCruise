@@ -1,0 +1,7 @@
+numpy
+opencv-python
+pillow
+pyWinhook
+keyboard
+mss
+scikit-image
